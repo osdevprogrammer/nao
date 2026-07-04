@@ -11,11 +11,6 @@ extern void serial_printf(const char* format, ...);
 extern volatile uint32_t timer_ticks;
 
 // Standard Windows .ani format structures (RIFF-based)
-// RIFF: "RIFF" + size + "ACON"
-//   "anih" chunk: ANI header (36 bytes)
-//   "seq " chunk: optional frame sequence
-//   "icon" chunks: each is a .cur file (frame data)
-
 #define ANI_MAX_FRAMES 16
 #define ANI_MAX_CURSOR_W 32
 #define ANI_MAX_CURSOR_H 32
@@ -35,10 +30,21 @@ static int ani_active = 0;
 static int ani_current_frame = 0;
 static uint32_t ani_frame_start_tick = 0;
 
+// ============================================================================
+// CONFIGURABLE VARIABLES FOR ANIMATION SPEED
+// ============================================================================
+uint32_t ani_speed_percentage = 1600;   // 100 = normal speed, 200 = twice as fast, 50 = half speed
+
 // Convert jiffies (1/60 sec) to timer ticks (1/18 sec)
-// jiffies * 18 / 60 = ticks
 static uint32_t jiffies_to_ticks(uint32_t jiffies) {
-    return (jiffies * 18 + 30) / 60;  // round to nearest
+    if (jiffies == 0) return 0;
+    
+    // Adjust duration inversely proportional to speed percentage
+    uint32_t adjusted_jiffies = (jiffies * 100) / ani_speed_percentage;
+    if (adjusted_jiffies == 0) adjusted_jiffies = 1;
+    
+    uint32_t ticks = (adjusted_jiffies * 18 + 30) / 60;
+    return (ticks == 0) ? 1 : ticks; 
 }
 
 // Read a 4-byte little-endian uint32 from a buffer
@@ -52,14 +58,12 @@ static uint16_t read_le16(const uint8_t* buf) {
 }
 
 // Parse a .cur file from memory and extract frame data
-// Returns 1 on success, 0 on failure
 static int parse_cur_frame(const uint8_t* cur_data, uint32_t cur_size, ani_frame_t* frame) {
     if (cur_size < 22) {
         serial_printf("[ANI] .cur data too small (%u bytes)\n", cur_size);
         return 0;
     }
 
-    // Verify .cur magic (type must be 2)
     uint16_t type = read_le16(cur_data + 2);
     if (type != 2) {
         serial_printf("[ANI] Invalid .cur type in frame: %d\n", type);
@@ -72,7 +76,6 @@ static int parse_cur_frame(const uint8_t* cur_data, uint32_t cur_size, ani_frame
     int16_t hy = (int16_t)read_le16(cur_data + 12);
     uint32_t data_offset = read_le32(cur_data + 18);
 
-    // Clamp dimensions
     if (cw > ANI_MAX_CURSOR_W) cw = ANI_MAX_CURSOR_W;
     if (ch > ANI_MAX_CURSOR_H) ch = ANI_MAX_CURSOR_H;
 
@@ -81,55 +84,59 @@ static int parse_cur_frame(const uint8_t* cur_data, uint32_t cur_size, ani_frame
     frame->hotspot_x = hx;
     frame->hotspot_y = hy;
 
-    // Read BMP info header (40 bytes) to find color depth
     if (data_offset + 40 > cur_size) {
         serial_printf("[ANI] .cur data offset out of bounds\n");
         return 0;
     }
-    const uint8_t* bmi = cur_data + data_offset;
-    uint16_t bpp = read_le16(bmi + 14);
-    uint32_t pixel_start = data_offset + 40;
 
-    // Read pixel data
-    uint32_t pixel_bytes = cw * ch * 4;
-    if (pixel_start + pixel_bytes > cur_size) {
-        // Try with fewer bytes for 24-bit
-        if (bpp == 24) {
-            pixel_bytes = cw * ch * 3;
-        }
-        if (pixel_start + pixel_bytes > cur_size) {
-            serial_printf("[ANI] .cur pixel data truncated\n");
-            return 0;
-        }
+    const uint8_t* dib = cur_data + data_offset;
+    uint32_t dib_header_size = read_le32(dib);
+    if (dib_header_size < 40) {
+        serial_printf("[ANI] Unsupported DIB header size: %u\n", dib_header_size);
+        return 0;
     }
 
-    // Clear frame pixels to transparent magenta
-    for (uint32_t i = 0; i < cw * ch * 4; i++) {
+    uint16_t bpp = read_le16(dib + 14);
+    uint32_t pixel_start = data_offset + dib_header_size;
+    if (pixel_start > cur_size) {
+        serial_printf("[ANI] .cur pixel data offset out of bounds\n");
+        return 0;
+    }
+
+    uint32_t bytes_per_pixel = (bpp + 7) / 8;
+    uint32_t row_stride = ((cw * bytes_per_pixel) + 3) & ~3U;
+    uint32_t pixel_bytes = row_stride * ch;
+    if (pixel_start + pixel_bytes > cur_size) {
+        serial_printf("[ANI] .cur pixel data truncated\n");
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < ANI_MAX_CURSOR_W * ANI_MAX_CURSOR_H * 4; i++) {
         frame->pixels[i] = 0;
     }
 
     if (bpp == 32) {
-        // 32-bit with alpha
         for (uint32_t y = 0; y < ch; y++) {
+            uint32_t src_row = ch - 1 - y;
             for (uint32_t x = 0; x < cw; x++) {
-                uint32_t src_idx = (y * cw + x) * 4;
-                uint32_t dst_idx = ((ch - 1 - y) * cw + x) * 4;  // flip Y
-                frame->pixels[dst_idx + 0] = cur_data[pixel_start + src_idx + 0];  // B
-                frame->pixels[dst_idx + 1] = cur_data[pixel_start + src_idx + 1];  // G
-                frame->pixels[dst_idx + 2] = cur_data[pixel_start + src_idx + 2];  // R
-                frame->pixels[dst_idx + 3] = cur_data[pixel_start + src_idx + 3];  // A
+                uint32_t src_idx = (src_row * row_stride) + (x * 4);
+                uint32_t dst_idx = (y * cw + x) * 4;
+                frame->pixels[dst_idx + 0] = cur_data[pixel_start + src_idx + 0];
+                frame->pixels[dst_idx + 1] = cur_data[pixel_start + src_idx + 1];
+                frame->pixels[dst_idx + 2] = cur_data[pixel_start + src_idx + 2];
+                frame->pixels[dst_idx + 3] = cur_data[pixel_start + src_idx + 3];
             }
         }
     } else if (bpp == 24) {
-        // 24-bit RGB (no alpha)
         for (uint32_t y = 0; y < ch; y++) {
+            uint32_t src_row = ch - 1 - y;
             for (uint32_t x = 0; x < cw; x++) {
-                uint32_t src_idx = (y * cw + x) * 3;
-                uint32_t dst_idx = ((ch - 1 - y) * cw + x) * 4;
-                frame->pixels[dst_idx + 0] = cur_data[pixel_start + src_idx + 0];  // B
-                frame->pixels[dst_idx + 1] = cur_data[pixel_start + src_idx + 1];  // G
-                frame->pixels[dst_idx + 2] = cur_data[pixel_start + src_idx + 2];  // R
-                frame->pixels[dst_idx + 3] = 255;  // fully opaque
+                uint32_t src_idx = (src_row * row_stride) + (x * 3);
+                uint32_t dst_idx = (y * cw + x) * 4;
+                frame->pixels[dst_idx + 0] = cur_data[pixel_start + src_idx + 0];
+                frame->pixels[dst_idx + 1] = cur_data[pixel_start + src_idx + 1];
+                frame->pixels[dst_idx + 2] = cur_data[pixel_start + src_idx + 2];
+                frame->pixels[dst_idx + 3] = 255;
             }
         }
     } else {
@@ -161,11 +168,8 @@ int ani_load(const char* path) {
     DWORD file_size = f_size(&file);
     serial_printf("[ANI] File size: %lu bytes\n", file_size);
 
-    // Read the entire file into memory for parsing
-    // (RIFF parsing is much easier with random access)
     uint8_t* file_data = (uint8_t*)0;
-    // Use a static buffer since we're in kernel space
-    static uint8_t ani_file_buf[65536];  // 64KB max for .ani files
+    static uint8_t ani_file_buf[65536];  
     if (file_size > sizeof(ani_file_buf)) {
         serial_printf("[ANI] File too large (%lu bytes, max %u)\n", file_size, sizeof(ani_file_buf));
         f_close(&file);
@@ -179,7 +183,6 @@ int ani_load(const char* path) {
     }
     f_close(&file);
 
-    // Parse RIFF header
     if (file_size < 12 || file_data[0] != 'R' || file_data[1] != 'I' || file_data[2] != 'F' || file_data[3] != 'F') {
         serial_printf("[ANI] Not a RIFF file\n");
         return 0;
@@ -193,13 +196,11 @@ int ani_load(const char* path) {
 
     serial_printf("[ANI] Valid RIFF ACON file (%u bytes)\n", riff_size + 8);
 
-    // Parse chunks
     uint32_t offset = 12;
-    uint32_t anih_rate = 60;  // default: 1 second (60 jiffies)
+    uint32_t anih_rate = 60;  
     uint32_t anih_frames = 0;
     uint32_t anih_steps = 0;
-    int has_anih = 0;
-    uint8_t seq_buffer[256];  // sequence buffer (parsed but not used for playback order)
+    uint8_t seq_buffer[256];  
     int seq_count = 0;
 
     while (offset + 8 <= file_size) {
@@ -211,25 +212,20 @@ int ani_load(const char* path) {
         chunk_id[4] = '\0';
         uint32_t chunk_size = read_le32(file_data + offset + 4);
         uint32_t chunk_end = offset + 8 + chunk_size;
-        // Align to 2 bytes
         if (chunk_end & 1) chunk_end++;
 
         serial_printf("[ANI] Chunk: '%s' size=%u\n", chunk_id, chunk_size);
 
         if (chunk_id[0] == 'a' && chunk_id[1] == 'n' && chunk_id[2] == 'i' && chunk_id[3] == 'h') {
-            // ANI header chunk (36 bytes)
             if (chunk_size >= 36 && offset + 8 + 36 <= file_size) {
                 const uint8_t* anih = file_data + offset + 8;
-                anih_frames = read_le32(anih + 4);   // cFrames
-                anih_steps = read_le32(anih + 8);    // cSteps
-                // cx, cy at +12, +16
-                anih_rate = read_le32(anih + 20);    // iRate (jiffies, 1/60 sec)
-                if (anih_rate == 0) anih_rate = 60;  // default to 1 second
-                has_anih = 1;
+                anih_frames = read_le32(anih + 4);   
+                anih_steps = read_le32(anih + 8);    
+                anih_rate = read_le32(anih + 20);    
+                if (anih_rate == 0) anih_rate = 60;  
                 serial_printf("[ANI] Header: frames=%u, steps=%u, rate=%u jiffies\n", anih_frames, anih_steps, anih_rate);
             }
         } else if (chunk_id[0] == 's' && chunk_id[1] == 'e' && chunk_id[2] == 'q' && chunk_id[3] == ' ') {
-            // Sequence chunk - list of frame indices to play
             seq_count = chunk_size / 4;
             if (seq_count > 256) seq_count = 256;
             for (int i = 0; i < seq_count; i++) {
@@ -237,12 +233,11 @@ int ani_load(const char* path) {
             }
             serial_printf("[ANI] Sequence: %d entries\n", seq_count);
         } else if (chunk_id[0] == 'L' && chunk_id[1] == 'I' && chunk_id[2] == 'S' && chunk_id[3] == 'T') {
-            // LIST chunk - parse sub-chunks inside (icon frames)
             uint32_t list_start = offset + 8;
             uint32_t list_end = offset + 8 + chunk_size;
             if (list_end & 1) list_end++;
             
-            uint32_t sub_offset = list_start;
+            uint32_t sub_offset = list_start + 4;
             while (sub_offset + 8 <= list_end && ani_frame_count < ANI_MAX_FRAMES) {
                 char sub_id[5];
                 sub_id[0] = file_data[sub_offset];
@@ -255,7 +250,6 @@ int ani_load(const char* path) {
                 if (sub_end & 1) sub_end++;
 
                 if (sub_id[0] == 'i' && sub_id[1] == 'c' && sub_id[2] == 'o' && sub_id[3] == 'n') {
-                    // Icon chunk inside LIST - contains a .cur file
                     const uint8_t* cur_data = file_data + sub_offset + 8;
                     if (parse_cur_frame(cur_data, sub_size, &ani_frames[ani_frame_count])) {
                         ani_frames[ani_frame_count].duration_jiffies = anih_rate;
@@ -269,12 +263,10 @@ int ani_load(const char* path) {
                         ani_frame_count++;
                     }
                 }
-
                 sub_offset = sub_end;
             }
             serial_printf("[ANI] LIST contained %d icon frames\n", ani_frame_count);
         } else if (chunk_id[0] == 'i' && chunk_id[1] == 'c' && chunk_id[2] == 'o' && chunk_id[3] == 'n') {
-            // Icon chunk at top level (not in LIST)
             if (ani_frame_count < ANI_MAX_FRAMES) {
                 const uint8_t* cur_data = file_data + offset + 8;
                 uint32_t cur_size = chunk_size;
@@ -291,7 +283,6 @@ int ani_load(const char* path) {
                 }
             }
         }
-
         offset = chunk_end;
         if (offset >= file_size) break;
     }
@@ -309,7 +300,7 @@ void ani_play(void) {
     if (ani_frame_count == 0) return;
     ani_active = 1;
     ani_current_frame = 0;
-    ani_frame_start_tick = timer_ticks;
+    ani_frame_start_tick = timer_ticks; // Reset clock alignment on play
     serial_printf("[ANI] Animation started (%d frames)\n", ani_frame_count);
 }
 
@@ -325,7 +316,6 @@ int ani_update(uint32_t current_tick) {
     uint32_t elapsed = current_tick - ani_frame_start_tick;
     uint32_t total_duration = 0;
 
-    // Calculate total duration of all frames in ticks
     for (int i = 0; i < ani_frame_count; i++) {
         total_duration += jiffies_to_ticks(ani_frames[i].duration_jiffies);
     }
@@ -344,7 +334,6 @@ int ani_update(uint32_t current_tick) {
             }
         }
     }
-
     return 1;
 }
 
@@ -373,7 +362,6 @@ void ani_draw(int m_x, int m_y) {
             uint8_t r = frame->pixels[idx + 2];
             uint8_t a = frame->pixels[idx + 3];
 
-            // Pure magenta fallback transparency check or true alpha channel check
             if ((r == 255 && g == 0 && b == 255) || a == 0) continue;
 
             back_buffer[scr_y * (int)gfx_width + scr_x] = (r << 16) | (g << 8) | b;
@@ -385,29 +373,49 @@ int ani_is_active(void) {
     return ani_active;
 }
 
-// Blocking delay that animates the cursor while waiting
+// Optimized safe delay loop that tracks state to avoid redrawing if unchanged
 void ani_delay_ticks(uint32_t ticks, uint32_t* bb, uint32_t gw, uint32_t gh, uint32_t gp) {
+    uint32_t start = timer_ticks;
+    uint32_t last_frame_draw = 0;
+
+    // Reset base tracking timers so consecutive runs don't think they're already up to date
+    if (ani_active) {
+        ani_frame_start_tick = timer_ticks; 
+    }
+
+    // Explicitly scope variables locally without static persistence across calls
+    int last_mouse_x = -1;
+    int last_mouse_y = -1;
+    int last_frame_idx = -1;
+
+    // If animation is not active, spin wait accurately
     if (!ani_active || ani_frame_count == 0) {
-        uint32_t start = timer_ticks;
         while ((timer_ticks - start) < ticks) {
-            // Spin
+            // Spin wait securely
         }
         return;
     }
 
-    uint32_t start = timer_ticks;
-    uint32_t last_frame_draw = 0;
-
     while ((timer_ticks - start) < ticks) {
         ani_update(timer_ticks);
 
+        // Only draw/blit if a tick changed, mouse moved, or frame index rotated
         if (timer_ticks != last_frame_draw) {
-            last_frame_draw = timer_ticks;
-            ani_draw(mouse_x, mouse_y);
+            if (mouse_x != last_mouse_x || mouse_y != last_mouse_y || ani_current_frame != last_frame_idx) {
+                last_frame_draw = timer_ticks;
+                last_mouse_x = mouse_x;
+                last_mouse_y = mouse_y;
+                last_frame_idx = ani_current_frame;
 
-            for (uint32_t y = 0; y < gh; y++) {
-                for (uint32_t x = 0; x < gw; x++) {
-                    gfx_framebuffer[y * (gp / 4) + x] = bb[y * gw + x];
+                ani_draw(mouse_x, mouse_y);
+
+                // Push buffer out to framebuffer
+                for (uint32_t y = 0; y < gh; y++) {
+                    uint32_t dest_offset = y * (gp / 4);
+                    uint32_t src_offset = y * gw;
+                    for (uint32_t x = 0; x < gw; x++) {
+                        gfx_framebuffer[dest_offset + x] = bb[src_offset + x];
+                    }
                 }
             }
         }

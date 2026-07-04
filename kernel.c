@@ -65,7 +65,7 @@ static int color_mixer_minimized = 0;
 #define APP_LAUNCH_NAOVIEW 5
 static int pending_app_launch = APP_LAUNCH_NONE;
 static uint32_t pending_app_start_tick = 0;
-#define ANIMATION_DELAY_TICKS 36  // ~2 seconds at 18 ticks/sec
+#define ANIMATION_DELAY_TICKS 18  // ~2 seconds at 18 ticks/sec
 extern int file_explorer_active;
 extern int file_explorer_minimized;
 extern void explorer_trigger_refresh(void);
@@ -345,7 +345,8 @@ extern void kfree(void* ptr);
  void* stbi_malloc_arena(uint32_t size) {
     size = (size + 3) & ~3;
     if (stb_arena_offset + size > sizeof(stb_arena)) {
-        serial_printf("[STB ARENA ERROR] Allocation out of bounds! Requested: %u bytes\n", size);
+        
+
         return (void*)0;
     }
     void* ptr = &stb_arena[stb_arena_offset];
@@ -379,34 +380,34 @@ struct nk_image load_image_via_stb(const char* path, uint32_t* out_pixel_buffer,
     struct nk_image img = {0};
 
     stb_arena_offset = 0;
-    serial_printf("\n============================================\n");
-    serial_printf("[STB TRACE] Loading asset: %s\n", path);
+    
+    
 
     if (f_open(&file, path, FA_READ) != FR_OK) {
-        serial_printf("[STB ERROR] Failed to open %s\n", path);
+        
         return img;
     }
 
     DWORD file_size = f_size(&file);
-    serial_printf("[STB DBG] File Size: %lu bytes\n", file_size);
+    
 
     uint8_t* file_scratch_buffer = (uint8_t*)stbi_malloc_arena(file_size);
     if (!file_scratch_buffer) {
-        serial_printf("[STB ERROR] Insufficient workspace arena depth.\n");
+        
         f_close(&file);
         return img;
     }
 
     if (f_read(&file, file_scratch_buffer, file_size, &br) != FR_OK || br != file_size) {
-        serial_printf("[STB ERROR] Failed reading file into scratch memory payload\n");
+        
         f_close(&file);
         return img;
     }
     f_close(&file);
 
     if (file_size >= 4) {
-        serial_printf("[STB DBG] Magic Bytes: %02X %02X %02X %02X\n", 
-            file_scratch_buffer[0], file_scratch_buffer[1], file_scratch_buffer[2], file_scratch_buffer[3]);
+        
+    
     }
 
     int width = 0, height = 0, channels = 0;
@@ -422,14 +423,12 @@ struct nk_image load_image_via_stb(const char* path, uint32_t* out_pixel_buffer,
     );
 
     if (!decoded_pixels) {
-        serial_printf("[STB ERROR] Core parsing pass failed for: %s\n", path);
         return img;
     }
 
-    serial_printf("[STB DBG] Decoded Resolution: %dx%d | Source Channels: %d\n", width, height, channels);
+    
 
     if (width != expected_w || height != expected_h) {
-        serial_printf("[STB ERROR] Coordinate bounds mismatch for %s.\n", path);
         return img;
     }
 
@@ -455,7 +454,7 @@ struct nk_image load_image_via_stb(const char* path, uint32_t* out_pixel_buffer,
     }
 
     if ((total_alpha / total_pixels) < 5) {
-        serial_printf("[STB WARNING] Image %s has low alpha. Injecting opaque layer...\n", path);
+        
         for (int i = 0; i < total_pixels; i++) {
             out_pixel_buffer[i] |= 0xFF000000; 
         }
@@ -465,7 +464,7 @@ struct nk_image load_image_via_stb(const char* path, uint32_t* out_pixel_buffer,
     img.w = width;
     img.h = height;
 
-    serial_printf("[STB SUCCESS] Loaded image safely: %s\n============================================\n\n", path);
+
     return img;
 }
 
@@ -577,7 +576,7 @@ void kernel_main(struct multiboot_info* mbinfo) {
     static int active_drag_window_id = 0;
 
     FRESULT mount_res = f_mount(&fs, "0:", 1);
-    serial_printf("[STORAGE] Storage mount evaluation code: %d\n", (int)mount_res);
+
 
     // Try to load boot.png from VFS for the boot screen (no dimension restriction)
     int boot_img_w = 0, boot_img_h = 0;
@@ -622,17 +621,13 @@ void kernel_main(struct multiboot_info* mbinfo) {
     // Initialize animated cursor system and load the loading animation
     ani_init();
     ani_load("0:/arrow_load.ani");
-
     img_connected = load_image_via_stb("0:/connected.png", connected_pixels, 64, 64);
     img_noconnect = load_image_via_stb("0:/noconnect.png", noconnect_pixels, 64, 64);
     
     if (init_rtl8139()) {
-        serial_printf("[NETWORK] RTL8139 hardware found and initialized successfully!\n");
-        serial_printf("[NETWORK] Hardware MAC Address: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                      mac_address[0], mac_address[1], mac_address[2],
-                      mac_address[3], mac_address[4], mac_address[5]);
+
     } else {
-        serial_printf("[NETWORK ERROR] RTL8139 PCI Card could not be detected on the bus!\n");
+        
     }
 
     lwip_init();
@@ -703,10 +698,12 @@ void kernel_main(struct multiboot_info* mbinfo) {
                         serial_printf("[SHELL] Launched NaoView\n");
                         break;
                 }
+                
+                // CRITICAL FIX: Clear the tracking states completely for the next app click
                 pending_app_launch = APP_LAUNCH_NONE;
+                pending_app_start_tick = 0;
             }
         }
-
         uint32_t back_pitch = gfx_width * 4;
         uint32_t current_bg_color = (bg_r << 16) | (bg_g << 8) | bg_b;
 
@@ -720,12 +717,7 @@ void kernel_main(struct multiboot_info* mbinfo) {
             static uint32_t report_timer = 0;
             if (timer_ticks - report_timer > 90) {
                 report_timer = timer_ticks;
-                serial_printf("[NETWORK LOOP REPORT] Interface Flags: 0x%X | Configured IP Match: %d.%d.%d.%d\n",
-                              my_netif.flags,
-                              (my_netif.ip_addr.addr & 0xFF),
-                              ((my_netif.ip_addr.addr >> 8) & 0xFF),
-                              ((my_netif.ip_addr.addr >> 16) & 0xFF),
-                              ((my_netif.ip_addr.addr >> 24) & 0xFF));
+                
             }
 
             netif_driver_poll(&my_netif);
@@ -827,7 +819,7 @@ void kernel_main(struct multiboot_info* mbinfo) {
             struct nk_image target_icon = (current_net_status == NET_STATUS_CONNECTED) ? img_connected : img_noconnect;
 
             if (target_icon.handle.ptr == NULL) {
-                if (trace_this_frame) serial_printf("[TASKBAR ERROR] Target Icon Pointer is NULL!\n");
+                
                 nk_fill_rect(&ctx.current->buffer, icon_bounds, 0.0f, nk_rgb(255, 0, 0)); 
             } else {
                 nk_image(&ctx, target_icon);
