@@ -70,6 +70,8 @@ extern int file_explorer_active;
 extern int file_explorer_minimized;
 extern void explorer_trigger_refresh(void);
 extern void render_file_explorer(struct nk_context* ctx, int* active_drag_window_id);
+extern uint32_t get_used_memory(void);
+extern uint32_t get_total_memory(void);
 // --- PERSISTENT DESKTOP WINDOW GEOMETRY ENGINE ---
 // These variables live across the entire OS lifecycle and preserve positions
 struct nk_rect bounds_sys_monitor   = {50,  50,  400, 300};
@@ -983,22 +985,49 @@ void kernel_main(struct multiboot_info* mbinfo) {
        
 
         if (sys_monitor_active && !sys_monitor_minimized) {
-            // CRITICAL FIX: Pass the persistent global layout structure
             if (nk_begin(&ctx, "System Monitor", bounds_sys_monitor,
                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) 
             {
-                // Capture any moving/dragging coordinates back to kernel persistent storage
                 bounds_sys_monitor = nk_window_get_bounds(&ctx);
 
+                // 1. Render Uptime Statistics
                 uint32_t seconds = timer_ticks / 18;
                 char ticks_str[32] = "System Ticks: ", secs_str[32] = "Uptime (Sec): ", num_buf[16];
                 mini_itoa(timer_ticks, num_buf);
                 int idx = 14; for(int n=0; num_buf[n] != '\0' && idx < 31; n++) ticks_str[idx++] = num_buf[n]; ticks_str[idx] = '\0';
                 mini_itoa(seconds, num_buf);
                 idx = 14; for(int n=0; num_buf[n] != '\0' && idx < 31; n++) secs_str[idx++] = num_buf[n]; secs_str[idx] = '\0';
+                
+                nk_layout_row_dynamic(&ctx, 22, 1);
+                nk_label(&ctx, ticks_str, NK_TEXT_LEFT); 
+                nk_label(&ctx, secs_str, NK_TEXT_LEFT);
+                
+                // 2. Fetch the metrics directly computed by mm.c
+                uint32_t used_mem = get_used_memory();
+                uint32_t total_mem = get_total_memory();
+                
+                // Safe boundary-clamped allocation percentage tracking
+                nk_size mem_percent = 0;
+                if (total_mem > 0) {
+                    mem_percent = (nk_size)((used_mem * 100) / total_mem);
+                    if (mem_percent > 100) mem_percent = 100;
+                }
+
+                // Format string output layout: "Memory Used: X% (KB / KB)"
+                char mem_str[64];
+                mini_snprintf(mem_str, sizeof(mem_str), "Memory Used: %d%% (%d KB / %d KB)", 
+                              (int)mem_percent, used_mem / 1024, total_mem / 1024);
+                
+                nk_layout_row_dynamic(&ctx, 18, 1);
+                nk_label(&ctx, mem_str, NK_TEXT_LEFT);
+
+                // 3. Render the Nuklear Progress Bar tracking status
+                nk_layout_row_dynamic(&ctx, 20, 1);
+                nk_progress(&ctx, &mem_percent, 100, NK_FIXED); 
+
+                nk_layout_row_dynamic(&ctx, 10, 1); // Layout spacing split
+                
                 nk_layout_row_dynamic(&ctx, 25, 1);
-                nk_label(&ctx, ticks_str, NK_TEXT_LEFT); nk_label(&ctx, secs_str, NK_TEXT_LEFT);
-                nk_layout_row_dynamic(&ctx, 30, 1);
                 nk_label(&ctx, "Status: Kernel Operational", NK_TEXT_LEFT);
             }
             if (nk_window_has_focus(&ctx) || active_drag_window_id == 1) {

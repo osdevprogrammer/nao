@@ -81,3 +81,30 @@ void kfree(void* ptr) {
         }
     }
 }
+// --- REAL-TIME HEAP METRICS EXTENSION ---
+
+uint32_t get_total_memory(void) {
+    // Returns the absolute size of the static array space (4 MB)
+    return 4 * 1024 * 1024;
+}
+
+uint32_t get_used_memory(void) {
+    if (!mm_initialized) return 0;
+
+    uint32_t used_bytes = 0;
+    struct block_header* current = heap_start;
+
+    // Walk the entire structural block chain
+    while (current) {
+        // Count the overhead of the metadata header structure itself
+        used_bytes += sizeof(struct block_header);
+
+        // If the block is active (not free), add its allocated payload size
+        if (!current->is_free) {
+            used_bytes += current->size;
+        }
+        current = current->next;
+    }
+
+    return used_bytes;
+}
