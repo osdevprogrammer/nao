@@ -4,7 +4,7 @@
 
 ### Prerequisites
 
-1. GCC 13
+1. GCC 13 (MUST BE 13!!!!) (sudo apt install gcc-13)
 
 ### Instructions
 
