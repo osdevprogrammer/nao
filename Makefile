@@ -1,5 +1,5 @@
 # Compiler and assembler definitions
-CC = gcc
+CC = gcc-13
 AS = nasm
 LD = ld
 
@@ -44,17 +44,17 @@ OBJS = boot.o kernel.o idt.o gdt.o serial.o gui.o mm.o diskio.o ff.o explorer.o 
        $(LWIP_OBJS)
 
 # Outputs
-TARGET = myos.bin
-ISO_OUT = myos.iso
+TARGET = nao.bin
+ISO_OUT = nao.iso
 
 # Persistent storage definitions
-DISK_RAW = disk.img
-DISK_VDI = disk.vdi
-DISK_SIZE_MB = 10
+DISK_RAW = hdd.img
+DISK_QCOW2 = hdd.qcow2
+DISK_SIZE_MB = 16
 
 .PHONY: all clean clean-all run
 
-all: $(TARGET) $(ISO_OUT) $(DISK_VDI)
+all: $(TARGET) $(ISO_OUT) $(DISK_QCOW2)
 
 # Link the kernel binary
 $(TARGET): $(OBJS)
@@ -82,13 +82,13 @@ $(ISO_OUT): $(TARGET)
 	grub-mkrescue -o $(ISO_OUT) iso
 	@rm -rf iso
 
-# Create a persistent 10MB VirtualBox VDI hard disk if it doesn't exist
-$(DISK_VDI):
+# Create a persistent 10MB VirtualBox QCOW2 hard disk if it doesn't exist
+$(DISK_QCOW2):
 	@echo "[MAKE] Generating fresh raw storage container..."
 	dd if=/dev/zero of=$(DISK_RAW) bs=1M count=$(DISK_SIZE_MB)
 	
 	@echo "[MAKE] Formatting raw disk layout with FAT16 filesystem..."
-	mkfs.vfat -F 16 $(DISK_RAW)
+	sudo mkfs.vfat -F 16 $(DISK_RAW)
 	
 	@echo "[MAKE] Injecting system configuration and bitmap assets..."
 	@if [ -f arrow.cur ]; then mcopy -i $(DISK_RAW) arrow.cur ::/arrow.cur; fi
@@ -97,18 +97,18 @@ $(DISK_VDI):
 	@if [ -f noconnect.png ]; then mcopy -i $(DISK_RAW) noconnect.png ::/noconnect.png; fi
 	@if [ -f boot.png ]; then mcopy -i $(DISK_RAW) boot.png ::/boot.png; fi
 
-	@echo "[MAKE] Converting raw disk layout into VirtualBox VDI image..."
-	rm -f $(DISK_VDI)
-	qemu-img convert -f raw -O vdi $(DISK_RAW) $(DISK_VDI)
+	@echo "[MAKE] Converting raw disk layout into VirtualBox QCOW2 image..."
+	rm -f $(DISK_QCOW2)
+	qemu-img convert -f raw -O qcow2 $(DISK_RAW) $(DISK_QCOW2)
 	rm -f $(DISK_RAW)
 
 clean:
-	rm -f $(OBJS) $(TARGET) $(ISO_OUT) $(DISK_VDI)
+	rm -f $(OBJS) $(TARGET) $(ISO_OUT) $(DISK_QCOW2)
 
-run: $(ISO_OUT) $(DISK_VDI)
+run: $(ISO_OUT) $(DISK_QCOW2)
 	qemu-system-i386 \
     	-cdrom $(ISO_OUT) \
-    	-drive file=$(DISK_VDI),format=vdi,bus=0,unit=0,media=disk \
+    	-drive file=$(DISK_QCOW2),format=qcow2,bus=0,unit=0,media=disk \
     	-vga std \
     	-boot d \
     	-netdev user,id=net0,net=10.0.2.0/24,dhcpstart=10.0.2.15 \
