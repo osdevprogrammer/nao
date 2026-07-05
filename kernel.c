@@ -560,7 +560,94 @@ void update_network_monitor(uint32_t current_tick) {
         }
     }
 }
+// External STB image decoder definitions already linked in your framework
+extern size_t stb_arena_offset;
+extern unsigned char* stbi_load_from_memory(unsigned char const *buffer, int len, int *x, int *y, int *channels_in_file, int desired_channels);
+extern void* kmalloc(uint32_t size);
+extern void kfree(void* ptr);
 
+void sys_shutdown(void) {
+    FIL fp;
+    FRESULT fr;
+    UINT bytes_read;
+
+    serial_printf("[KERNEL] Initiating system shutdown sequence...\n");
+
+    // 1. Clear the entire hardware framebuffer screen to a solid black background
+    for (uint32_t i = 0; i < gfx_width * gfx_height; i++) {
+        gfx_framebuffer[i] = 0x000000;
+    }
+
+    // 2. Attempt to open the shutdown image from storage
+    fr = f_open(&fp, "0:/shutdown.png", FA_READ);
+    if (fr == FR_OK) {
+        UINT file_size = f_size(&fp);
+        
+        // Allocate a temporary buffer for raw PNG disk data
+        unsigned char* png_disk_buffer = (unsigned char*)kmalloc(file_size);
+        if (png_disk_buffer) {
+            fr = f_read(&fp, png_disk_buffer, file_size, &bytes_read);
+            if (fr == FR_OK && bytes_read == file_size) {
+                int width = 0, height = 0, channels = 0;
+                
+                // Clear the stb memory arena pointer offset exactly like NaoView does
+                stb_arena_offset = 0; 
+                
+                // Decode the file into raw 32-bit RGBA pixel sequences
+                unsigned char* decoded_pixels = stbi_load_from_memory(
+                    png_disk_buffer, file_size, &width, &height, &channels, 4
+                );
+
+                if (decoded_pixels) {
+                    serial_printf("[KERNEL] Displaying centered 800x600 shutdown splash screen.\n");
+                    
+                    // Calculate starting positions to center the 800x600 image on screen
+                    int start_x = ((int)gfx_width - width) / 2;
+                    int start_y = ((int)gfx_height - height) / 2;
+                    
+                    // Bounds safety fallback checks
+                    if (start_x < 0) start_x = 0;
+                    if (start_y < 0) start_y = 0;
+
+                    // Copy pixels directly into the centered hardware framebuffer area
+                    for (int y = 0; y < height; y++) {
+                        int scr_y = start_y + y;
+                        if (scr_y >= (int)gfx_height) break; // Check vertical screen bounds
+
+                        // FIX: Flip the source row index vertically to fix the upside-down orientation
+                        int src_y = height - 1 - y;
+
+                        for (int x = 0; x < width; x++) {
+                            int scr_x = start_x + x;
+                            if (scr_x >= (int)gfx_width) break; // Check horizontal screen bounds
+
+                            int pixel_idx = (src_y * width + x) * 4;
+                            uint8_t r = decoded_pixels[pixel_idx + 0];
+                            uint8_t g = decoded_pixels[pixel_idx + 1];
+                            uint8_t b = decoded_pixels[pixel_idx + 2];
+
+                            // Convert decoded RGBA components to your native 32-bit pixel format
+                            gfx_framebuffer[scr_y * gfx_width + scr_x] = (r << 16) | (g << 8) | b;
+                        }
+                    }
+                } else {
+                    serial_printf("[KERNEL ERROR] Image corruption: Could not decode shutdown.png\n");
+                }
+            }
+            kfree(png_disk_buffer);
+        }
+        f_close(&fp);
+    } else {
+        serial_printf("[KERNEL WARNING] 0:/shutdown.png missing. Fallback to blank screen active.\n");
+    }
+
+    serial_printf("[KERNEL] System halted safely. Good bye!\n");
+
+    // Disable system interrupts and lock the CPU into a terminal hard halt state
+    while (1) {
+        __asm__ volatile("cli; hlt");
+    }
+}
 static FATFS fs;
 void kernel_main(struct multiboot_info* mbinfo) {
     init_serial();
@@ -886,61 +973,14 @@ void kernel_main(struct multiboot_info* mbinfo) {
                 }
                 nk_layout_row_dynamic(&ctx, 35, 1);
                 if (nk_button_label(&ctx, "  Shutdown  ")) {
-                    system_shutdown = 1;
+                    sys_shutdown();
                     start_menu_open = 0;
                 }
             }
             nk_end(&ctx);
         }
         
-        // Handle shutdown
-        if (system_shutdown) {
-            // Clear screen to blank (black)
-            for (uint32_t y_sh = 0; y_sh < gfx_height; y_sh++) {
-                for (uint32_t x_sh = 0; x_sh < gfx_width; x_sh++) {
-                    putpixel(gfx_framebuffer, x_sh, y_sh, 0x00000000, gfx_pitch);
-                }
-            }
-            
-            // Draw shutdown text on display
-            uint32_t shutdown_text_color = 0x00FFFFFF;
-            char* msg1 = "It is now safe to turn off";
-            char* msg2 = "the computer.";
-            
-            // Calculate center position
-            int text_x = (gfx_width - (32 * 8)) / 2;  // 32 characters * 8px width
-            int text_y = gfx_height / 2 - 16;
-            
-            // Draw the two lines of text
-            int x_pos = text_x;
-            int y_pos = text_y;
-            char* p = msg1;
-            while (*p) {
-                draw_char(gfx_framebuffer, x_pos, y_pos, *p, shutdown_text_color, gfx_pitch, putpixel);
-                x_pos += 8;
-                p++;
-            }
-            
-            x_pos = text_x;
-            y_pos = text_y + 10;
-            p = msg2;
-            while (*p) {
-                draw_char(gfx_framebuffer, x_pos, y_pos, *p, shutdown_text_color, gfx_pitch, putpixel);
-                x_pos += 8;
-                p++;
-            }
-            
-            // Display shutdown message via serial too
-            serial_printf("\n\n========================================\n");
-            serial_printf("  It is now safe to turn off the computer.\n");
-            serial_printf("========================================\n\n");
-            
-            // Halt the system
-            asm volatile("cli");
-            while(1) {
-                asm volatile("hlt");
-            }
-        }
+       
 
         if (sys_monitor_active && !sys_monitor_minimized) {
             // CRITICAL FIX: Pass the persistent global layout structure

@@ -96,7 +96,7 @@ $(DISK_QCOW2):
 	@if [ -f connected.png ]; then mcopy -i $(DISK_RAW) connected.png ::/connected.png; fi
 	@if [ -f noconnect.png ]; then mcopy -i $(DISK_RAW) noconnect.png ::/noconnect.png; fi
 	@if [ -f boot.png ]; then mcopy -i $(DISK_RAW) boot.png ::/boot.png; fi
-
+	@if [ -f shutdown.png ]; then mcopy -i $(DISK_RAW) shutdown.png ::/shutdown.png; fi
 	@echo "[MAKE] Converting raw disk layout into VirtualBox QCOW2 image..."
 	rm -f $(DISK_QCOW2)
 	qemu-img convert -f raw -O qcow2 $(DISK_RAW) $(DISK_QCOW2)

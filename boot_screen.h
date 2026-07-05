@@ -86,14 +86,14 @@ void show_boot_screen(uint32_t* boot_img, int boot_img_w, int boot_img_h) {
         bar_y = img_y + boot_img_h + 30;
     } else {
         // Fallback: show "Nao OS" text centered
-        const char* title = "Nao OS";
+        const char* title = "FATAL: 0:/boot.png Corrupt  Missing";
         int text_len = 0;
         while (title[text_len]) text_len++;
         int title_x = (screen_w - (text_len * 8)) / 2;
         int title_y = screen_h / 2 - 40;
 
         boot_draw_string(gfx_framebuffer, title_x, title_y, title, 0x0044AAFF, pitch);
-        boot_draw_string(gfx_framebuffer, title_x, title_y + 20, "Loading...", status_color, pitch);
+        boot_draw_string(gfx_framebuffer, title_x, title_y + 20, "Corrupt.", status_color, pitch);
         bar_y = title_y + 60;
     }
 
