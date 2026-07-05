@@ -22,7 +22,7 @@ extern void* stbi_malloc_arena(size_t size);
 extern void stbi_set_flip_vertically_on_load(int flag);
 extern unsigned char* stbi_load_from_memory(unsigned char const *buffer, int len, int *x, int *y, int *channels_in_file, int desired_channels);
 // Add these to the top of naoview.c
-
+extern struct nk_rect bounds_naoview;
 
 // ============================================================================
 // NAOVIEW MODULE: DYNAMIC IMAGE VIEWER WITH STATUS ALERTS
@@ -142,9 +142,11 @@ void naoview_open_file(const char* path) {
 void render_naoview(struct nk_context* ctx, int* active_drag_window_id) {
     if (!naoview_active || naoview_minimized) return;
 
-    if (nk_begin(ctx, "NaoView - Image Viewer", nk_rect(220, 120, 480, 420),
-        NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) 
+    if (nk_begin(ctx, "NaoView - Image Viewer", bounds_naoview,
+        NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE))
     {
+        // Write the new dynamic window boundaries instantly back into kernel tracking table
+        bounds_naoview = nk_window_get_bounds(ctx);
         // 1. Menu Bar Layout
         nk_menubar_begin(ctx);
         nk_layout_row_begin(ctx, NK_STATIC, 25, 1);

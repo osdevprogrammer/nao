@@ -37,7 +37,7 @@ static int show_rename_dialog = 0;
 static int show_delete_dialog = 0;
 static int show_mkdir_dialog  = 0;
 static char op_input_buffer[64] = "";
-
+extern struct nk_rect bounds_file_explorer;
 static char* mini_strrchr(const char* str, int ch) {
     char* last = 0;
     while (*str) {
@@ -181,9 +181,11 @@ void render_file_explorer(struct nk_context* ctx, int* active_drag_window_id) {
     }
 
     // --- MAIN EXPLORER WINDOW ---
-    if (nk_begin(ctx, "File Explorer", nk_rect(200, 120, 400, 320),
-        NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) 
+    if (nk_begin(ctx, "File Explorer", bounds_file_explorer,
+        NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE))
     {
+        // Write the new dynamic window boundaries instantly back into kernel tracking table
+        bounds_file_explorer = nk_window_get_bounds(ctx);
         nk_layout_row_begin(ctx, NK_STATIC, 25, 3);
         nk_layout_row_push(ctx, 35);
         if (nk_button_label(ctx, "..")) {

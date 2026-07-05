@@ -18,7 +18,7 @@ extern volatile uint32_t timer_ticks; // CRITICAL: Need timer_ticks for non-bloc
 // Exported application state flags for kernel.c integration
 int naoedit_active = 0;
 int naoedit_minimized = 0;
-
+extern struct nk_rect bounds_naoedit;
 #define MAX_TEXT_LEN 4096
 static char text_buffer[MAX_TEXT_LEN] = "Welcome to NaoEdit!\nType your text here...";
 static int text_len = 41; 
@@ -113,9 +113,11 @@ void render_naoedit(struct nk_context* ctx, int* active_drag_window_id) {
     }
 
     // --- MAIN WINDOW ---
-    if (nk_begin(ctx, "NaoEdit", nk_rect(100, 80, 450, 350),
+    if (nk_begin(ctx, "NaoEdit", bounds_naoedit,
         NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) 
     {
+        // Write the new dynamic window boundaries instantly back into kernel tracking table
+        bounds_naoedit = nk_window_get_bounds(ctx);
         // 1. Menu Bar
         nk_menubar_begin(ctx);
         nk_layout_row_static(ctx, 25, 45, 1);

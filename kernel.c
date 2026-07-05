@@ -70,7 +70,13 @@ extern int file_explorer_active;
 extern int file_explorer_minimized;
 extern void explorer_trigger_refresh(void);
 extern void render_file_explorer(struct nk_context* ctx, int* active_drag_window_id);
-
+// --- PERSISTENT DESKTOP WINDOW GEOMETRY ENGINE ---
+// These variables live across the entire OS lifecycle and preserve positions
+struct nk_rect bounds_sys_monitor   = {50,  50,  400, 300};
+struct nk_rect bounds_theme_mixer   = {80,  70,  350, 400};
+struct nk_rect bounds_file_explorer = {120, 90,  500, 350};
+struct nk_rect bounds_naoedit       = {100, 80,  450, 350};
+struct nk_rect bounds_naoview       = {150, 100, 400, 400};
 // --- ASYNCHRONOUS PING & ICON TRACKING DEFINITIONS ---
 typedef enum {
     NET_STATUS_UNKNOWN,
@@ -937,9 +943,13 @@ void kernel_main(struct multiboot_info* mbinfo) {
         }
 
         if (sys_monitor_active && !sys_monitor_minimized) {
-            if (nk_begin(&ctx, "System Monitor", nk_rect(150, 100, 280, 200),
+            // CRITICAL FIX: Pass the persistent global layout structure
+            if (nk_begin(&ctx, "System Monitor", bounds_sys_monitor,
                 NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) 
             {
+                // Capture any moving/dragging coordinates back to kernel persistent storage
+                bounds_sys_monitor = nk_window_get_bounds(&ctx);
+
                 uint32_t seconds = timer_ticks / 18;
                 char ticks_str[32] = "System Ticks: ", secs_str[32] = "Uptime (Sec): ", num_buf[16];
                 mini_itoa(timer_ticks, num_buf);
@@ -964,109 +974,113 @@ void kernel_main(struct multiboot_info* mbinfo) {
         // FIXED WINDOW B: THE THEME CONFIGURATION MIXER PANEL
         // ==========================================================
         if (color_mixer_active && !color_mixer_minimized) {
-        if (nk_begin(&ctx, "Color Mixer", nk_rect(420, 40, 360, 500),
-            NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) 
-        {
-            int changed = 0;
-            char label_buffer[48];
+            // CRITICAL FIX: Pass the persistent global layout structure
+            if (nk_begin(&ctx, "Color Mixer", bounds_theme_mixer,
+                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE)) 
+            {
+                // Capture any moving/dragging coordinates back to kernel persistent storage
+                bounds_theme_mixer = nk_window_get_bounds(&ctx);
 
-            // Global Layout Modifier Checkboxes
-            nk_layout_row_dynamic(&ctx, 22, 1);
-            if (nk_checkbox_label(&ctx, "Enable Window Transparency Effects", &current_theme.use_transparency)) {
-                changed = 1;
-            }
-            
-            if (nk_checkbox_label(&ctx, "Enable Rounded Window & Button Corners", &current_theme.round_corners)) {
-                changed = 1;
-            }
+                int changed = 0;
+                char label_buffer[48];
 
-            nk_layout_row_dynamic(&ctx, 10, 1); // Spacer separator
+                // Global Layout Modifier Checkboxes
+                nk_layout_row_dynamic(&ctx, 22, 1);
+                if (nk_checkbox_label(&ctx, "Enable Window Transparency Effects", &current_theme.use_transparency)) {
+                    changed = 1;
+                }
+                
+                if (nk_checkbox_label(&ctx, "Enable Rounded Window & Button Corners", &current_theme.round_corners)) {
+                    changed = 1;
+                }
 
-            // --- Category 1: Desktop Background ---
-            mini_snprintf(label_buffer, sizeof(label_buffer), "Wallpaper [R:%d G:%d B:%d]", current_theme.bg_r, current_theme.bg_g, current_theme.bg_b);
-            nk_layout_row_dynamic(&ctx, 18, 1); nk_label(&ctx, label_buffer, NK_TEXT_LEFT);
-            
-            nk_layout_row_dynamic(&ctx, 24, 3);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.bg_r, 255, 1);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.bg_g, 255, 1);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.bg_b, 255, 1);
+                nk_layout_row_dynamic(&ctx, 10, 1); // Spacer separator
 
-            // --- Category 2: Window Base Background + Alpha ---
-            if (current_theme.use_transparency) {
-                mini_snprintf(label_buffer, sizeof(label_buffer), "UI Window [R:%d G:%d B:%d] Alpha:%d (0-255)", current_theme.win_r, current_theme.win_g, current_theme.win_b, current_theme.win_a);
-            } else {
-                mini_snprintf(label_buffer, sizeof(label_buffer), "UI Window [R:%d G:%d B:%d] Opaque", current_theme.win_r, current_theme.win_g, current_theme.win_b);
-            }
-            nk_layout_row_dynamic(&ctx, 18, 1); nk_label(&ctx, label_buffer, NK_TEXT_LEFT);
-            
-            int win_cols = current_theme.use_transparency ? 4 : 3;
-            nk_layout_row_dynamic(&ctx, 24, win_cols);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.win_r, 255, 1);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.win_g, 255, 1);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.win_b, 255, 1);
-            if (current_theme.use_transparency) {
-                changed |= nk_slider_int(&ctx, 0, &current_theme.win_a, 255, 1);
-            }
+                // --- Category 1: Desktop Background ---
+                mini_snprintf(label_buffer, sizeof(label_buffer), "Wallpaper [R:%d G:%d B:%d]", current_theme.bg_r, current_theme.bg_g, current_theme.bg_b);
+                nk_layout_row_dynamic(&ctx, 18, 1); nk_label(&ctx, label_buffer, NK_TEXT_LEFT);
+                
+                nk_layout_row_dynamic(&ctx, 24, 3);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.bg_r, 255, 1);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.bg_g, 255, 1);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.bg_b, 255, 1);
 
-            // --- Category 3: Title Bar Header Surface + Alpha ---
-            if (current_theme.use_transparency) {
-                mini_snprintf(label_buffer, sizeof(label_buffer), "Header Bar [R:%d G:%d B:%d] Alpha:%d (0-255)", current_theme.title_r, current_theme.title_g, current_theme.title_b, current_theme.title_a);
-            } else {
-                mini_snprintf(label_buffer, sizeof(label_buffer), "Header Bar [R:%d G:%d B:%d] Opaque", current_theme.title_r, current_theme.title_g, current_theme.title_b);
-            }
-            nk_layout_row_dynamic(&ctx, 18, 1); nk_label(&ctx, label_buffer, NK_TEXT_LEFT);
-            
-            nk_layout_row_dynamic(&ctx, 24, win_cols);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.title_r, 255, 1);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.title_g, 255, 1);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.title_b, 255, 1);
-            if (current_theme.use_transparency) {
-                changed |= nk_slider_int(&ctx, 0, &current_theme.title_a, 255, 1);
-            }
+                // --- Category 2: Window Base Background + Alpha ---
+                if (current_theme.use_transparency) {
+                    mini_snprintf(label_buffer, sizeof(label_buffer), "UI Window [R:%d G:%d B:%d] Alpha:%d (0-255)", current_theme.win_r, current_theme.win_g, current_theme.win_b, current_theme.win_a);
+                } else {
+                    mini_snprintf(label_buffer, sizeof(label_buffer), "UI Window [R:%d G:%d B:%d] Opaque", current_theme.win_r, current_theme.win_g, current_theme.win_b);
+                }
+                nk_layout_row_dynamic(&ctx, 18, 1); nk_label(&ctx, label_buffer, NK_TEXT_LEFT);
+                
+                int win_cols = current_theme.use_transparency ? 4 : 3;
+                nk_layout_row_dynamic(&ctx, 24, win_cols);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.win_r, 255, 1);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.win_g, 255, 1);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.win_b, 255, 1);
+                if (current_theme.use_transparency) {
+                    changed |= nk_slider_int(&ctx, 0, &current_theme.win_a, 255, 1);
+                }
 
-            // --- Category 4: Clickable Widget Button Nodes + Alpha ---
-            if (current_theme.use_transparency) {
-                mini_snprintf(label_buffer, sizeof(label_buffer), "Buttons [R:%d G:%d B:%d] Alpha:%d (0-255)", current_theme.btn_r, current_theme.btn_g, current_theme.btn_b, current_theme.btn_a);
-            } else {
-                mini_snprintf(label_buffer, sizeof(label_buffer), "Buttons [R:%d G:%d B:%d] Opaque", current_theme.btn_r, current_theme.btn_g, current_theme.btn_b);
-            }
-            nk_layout_row_dynamic(&ctx, 18, 1); nk_label(&ctx, label_buffer, NK_TEXT_LEFT);
-            
-            nk_layout_row_dynamic(&ctx, 24, win_cols);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.btn_r, 255, 1);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.btn_g, 255, 1);
-            changed |= nk_slider_int(&ctx, 0, &current_theme.btn_b, 255, 1);
-            if (current_theme.use_transparency) {
-                changed |= nk_slider_int(&ctx, 0, &current_theme.btn_a, 255, 1);
-            }
+                // --- Category 3: Title Bar Header Surface + Alpha ---
+                if (current_theme.use_transparency) {
+                    mini_snprintf(label_buffer, sizeof(label_buffer), "Header Bar [R:%d G:%d B:%d] Alpha:%d (0-255)", current_theme.title_r, current_theme.title_g, current_theme.title_b, current_theme.title_a);
+                } else {
+                    mini_snprintf(label_buffer, sizeof(label_buffer), "Header Bar [R:%d G:%d B:%d] Opaque", current_theme.title_r, current_theme.title_g, current_theme.title_b);
+                }
+                nk_layout_row_dynamic(&ctx, 18, 1); nk_label(&ctx, label_buffer, NK_TEXT_LEFT);
+                
+                nk_layout_row_dynamic(&ctx, 24, win_cols);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.title_r, 255, 1);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.title_g, 255, 1);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.title_b, 255, 1);
+                if (current_theme.use_transparency) {
+                    changed |= nk_slider_int(&ctx, 0, &current_theme.title_a, 255, 1);
+                }
 
-            if (changed) {
-                bg_r = current_theme.bg_r;
-                bg_g = current_theme.bg_g;
-                bg_b = current_theme.bg_b;
-                apply_theme_to_nuklear(&ctx);
-            }
+                // --- Category 4: Clickable Widget Button Nodes + Alpha ---
+                if (current_theme.use_transparency) {
+                    mini_snprintf(label_buffer, sizeof(label_buffer), "Buttons [R:%d G:%d B:%d] Alpha:%d (0-255)", current_theme.btn_r, current_theme.btn_g, current_theme.btn_b, current_theme.btn_a);
+                } else {
+                    mini_snprintf(label_buffer, sizeof(label_buffer), "Buttons [R:%d G:%d B:%d] Opaque", current_theme.btn_r, current_theme.btn_g, current_theme.btn_b);
+                }
+                nk_layout_row_dynamic(&ctx, 18, 1); nk_label(&ctx, label_buffer, NK_TEXT_LEFT);
+                
+                nk_layout_row_dynamic(&ctx, 24, win_cols);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.btn_r, 255, 1);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.btn_g, 255, 1);
+                changed |= nk_slider_int(&ctx, 0, &current_theme.btn_b, 255, 1);
+                if (current_theme.use_transparency) {
+                    changed |= nk_slider_int(&ctx, 0, &current_theme.btn_a, 255, 1);
+                }
 
-            nk_layout_row_dynamic(&ctx, 15, 1); // Row Padding Spacer
-            
-            nk_layout_row_dynamic(&ctx, 32, 2);
-            if (nk_button_label(&ctx, "Save Theme")) {
-                theme_save_to_disk();
+                if (changed) {
+                    bg_r = current_theme.bg_r;
+                    bg_g = current_theme.bg_g;
+                    bg_b = current_theme.bg_b;
+                    apply_theme_to_nuklear(&ctx);
+                }
+
+                nk_layout_row_dynamic(&ctx, 15, 1); // Row Padding Spacer
+                
+                nk_layout_row_dynamic(&ctx, 32, 2);
+                if (nk_button_label(&ctx, "Save Theme")) {
+                    theme_save_to_disk();
+                }
+                if (nk_button_label(&ctx, "Reload Config")) {
+                    theme_load_from_disk();
+                    apply_theme_to_nuklear(&ctx);
+                }
             }
-            if (nk_button_label(&ctx, "Reload Config")) {
-                theme_load_from_disk();
-                apply_theme_to_nuklear(&ctx);
+            // Handle focus routines matching remaining UI wrappers
+            if (nk_window_has_focus(&ctx) || active_drag_window_id == 2) {
+                if (mouse_left_clicked) active_drag_window_id = 2;
+            } else if (nk_window_is_hovered(&ctx) && mouse_left_clicked && active_drag_window_id == 0) {
+                if (!nk_item_is_any_active(&ctx)) { active_drag_window_id = 2; nk_window_set_focus(&ctx, "Color Mixer"); }
             }
+            nk_end(&ctx);
+            if (nk_window_is_hidden(&ctx, "Color Mixer")) color_mixer_active = 0;
         }
-        // Handle focus routines matching remaining UI wrappers
-        if (nk_window_has_focus(&ctx) || active_drag_window_id == 2) {
-            if (mouse_left_clicked) active_drag_window_id = 2;
-        } else if (nk_window_is_hovered(&ctx) && mouse_left_clicked && active_drag_window_id == 0) {
-            if (!nk_item_is_any_active(&ctx)) { active_drag_window_id = 2; nk_window_set_focus(&ctx, "Color Mixer"); }
-        }
-        nk_end(&ctx);
-        if (nk_window_is_hidden(&ctx, "Color Mixer")) color_mixer_active = 0;
-    }   
 
         render_file_explorer(&ctx, &active_drag_window_id);
         render_naoedit(&ctx, &active_drag_window_id);
